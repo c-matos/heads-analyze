@@ -1,0 +1,339 @@
+---
+title: |
+   HEADS 22-26
+      [![image alt >2](./images/fmup.png)](https://sigarra.up.pt/fmup/en/web_page.inicial)
+      [![image alt >1](./images/heads.png)](https://heads.med.up.pt/en/)
+   
+subtitle: "ANALYZE - Final Assignment"
+date: "2022/12/31"
+author:
+  - Carlos Matos
+  - Vera Pinheiro
+execute:
+  eval: true #runs the code in the chunk
+  echo: false #does not show the code in the final output
+  include: false #still evals, but prevents code and results from appearing in the final output
+format: 
+  html:
+    page-layout: full
+css: styles.css
+---
+
+
+# Risk factors for cervical cancer: a case study
+
+::: panel-tabset
+## Package imports
+```{r packages, echo = TRUE, include = TRUE, message = FALSE}
+
+# Importing the necessary packages
+
+library(rio)          # Import function for multiple file formats
+library(tidyverse)    # Data wrangling and visualization
+library(janitor)      # Data examining and cleaning functions
+library(summarytools) # Descriptive statistics
+library(kableExtra)   # Display and format html tables
+library(broom)        # Functions to tidy outputs
+library(tidymodels)   # Modeling and statistical analysis that share the underlying philosophy of the tidyverse.
+library(dotwhisker)   # Dot-and-Whisker Plots of Regression Results
+library(MASS)         # Used for the stepAIC function for automatic variable selection
+library(caret)        # For Classification and Regression Training
+library(pROC)         # To create ROC curves
+
+```
+
+
+```{r setup_chunk}
+
+knitr::opts_chunk$set(fig.width = 12, fig.height = 8)
+
+```
+
+## Data Import
+
+```{r data_import, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+#Immport the dataset directly from the website
+df <- rio::import(file = "https://archive.ics.uci.edu/ml/machine-learning-databases/00383/risk_factors_cervical_cancer.csv",
+                  setclass = "tibble") %>%
+  janitor::clean_names() 
+
+#Pre-process the dataset
+df <- df %>%
+  mutate(across(everything(), as.numeric)) %>% #forces "?" to NA
+  mutate(across(c(10, 12, 14:25, 29:36), ~ factor(., levels = c(0,1), labels = c("No","Yes")))) %>% #Convert the appropriate columns to factor
+  #mutate(across(c(6, 7, 9, 11), as.numeric)) %>% #Convert the appropriate columns to numeric
+  mutate(across(c(1:5, 8, 13, 26:28), as.integer)) %>% #Convert the appropriate columns to integer
+  rename_all(.funs = ~ str_replace_all(names(df),"st_ds","stds")) 
+
+str(df)
+```
+
+
+## Descriptive statistics
+
+```{r descriptive_stats,echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+summarytools::dfSummary(df) %>% 
+  print(method = "render")
+
+#TODO: some text interpreting descriptive analytics
+## dx_cancer will be our target variable. Other target variables will be discarded.
+## stds_cervical_condylomatosis and stds_aids only have one level (no positive cases)
+
+```
+
+## Univariate Regression
+
+```{r univariate_analysis, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+
+#In subsequent analyses our outcome variable will be "dx_cancer"
+outcome_var <- "dx_cancer"
+
+# Analysis to study association between a cancer diagnosis and each other variable, one at a time
+# Model of the type dx_cancer ~ other_var
+
+#* We created a function that, given a dataset, an outcome variable and other variable in the dataset, 
+#* returns the appropriate logistic regression. Accepts the optional boolean argument "exponentiate", 
+#* that allows the user to choose between exponentiated parameters or not.
+
+# Function output includes the terms of the regression, point estimate, std.error, test statistic, p.value, confidence interval and variables used in the model. If some error occurs, NA is returned.
+
+
+fit_logistic_model <- function(dataset, outcome_var, other_var, exponentiate = TRUE) {
+  out <- tryCatch(
+    {
+      #get dataset name passed as string
+      dataset <- get(dataset)
+      #fit the model
+      parsnip::fit(logistic_reg(), as.formula(paste(outcome_var, " ~ ", other_var)), data = dataset) %>% 
+        broom::tidy(exponentiate = exponentiate, conf.int = T) %>% 
+        mutate(outcome_var = outcome_var,
+               other_var = other_var)
+    },
+    error = function(cond) {
+      return(tibble('term'=NA, 'estimate'=NA, 'std.error'=NA, 'statistic'=NA, 'p.value'=NA, 'conf.low'=NA, 'conf.high'=NA, 
+                    'outcome_var' = outcome_var, 'other_var' = other_var))
+    }
+  )
+  return(out)
+}
+
+# Apply the created function to a list that contains all the variables in the dataset (not including target variables other than the desired one)
+logistic_results <- pmap_dfr(.l = as.list(crossing("df",
+                                                   outcome_var,
+                                                   names(df[c(1:28,30:31)]))),
+                             .f = ~ fit_logistic_model(dataset = ..1,
+                                                       outcome_var = ..2,
+                                                       other_var = ..3,
+                                                       exponentiate = T))
+
+# Add a variable with values "sig" or "not sig", depending on whether the confidence interval includes the value 1 (using the exponentiated values of the parameters)
+logistic_results2 <- logistic_results %>% 
+  mutate(sig = ifelse(p.value < 0.05, "sig","not sig")) %>% 
+  filter(term != "(Intercept)") 
+
+#INTERPRETATION:
+# Variables significantly associated with dx_cancer are:
+## age, dx_hpv, iud, iud_years, smokes_packs_year
+## Older age, having HPV, having IUD, using IUD for longer and higher intensity of smoking are associated with higher odds of having a cancer diagnosis.
+
+
+# Dot and whisker plot of all univariate models, condensed in a single plot
+
+## Some CIs are absurdly large, so in this step we process that data to hide those variables
+log_res_plot <- logistic_results2 %>% 
+  mutate(conf.high = ifelse(conf.high > 6 | is.na(conf.high), 6, conf.high)) %>% # processing to show large CIs as -20 to 20, just for the plot
+  mutate(conf.low = ifelse(conf.low < 0 | is.na(conf.low), 0.1, conf.low)) %>% 
+  filter(conf.high <= 6 & conf.low >= 0.1) %>% 
+  mutate(sig = ifelse(sig == "sig", "red","black"))
+
+#Plot to show the OR and CI (dot and whisker plot), for each variable as a predictor of dx_cancer
+log_res_plot %>% # excluding extremely large CIs
+  dwplot(dot_args = list(size = 2, aes(color = log_res_plot$sig)),
+         whisker_args = list(aes(color = log_res_plot$sig)),
+         vline = geom_vline(xintercept = 1, colour = "grey50", linetype = 2)) +
+  scale_color_manual(paste0(as.character("\u03B1")," = 0.05"), breaks = c("red", "black"), values = c("red","black"),
+                       labels = c("Significant", "Not significant")) +
+  scale_x_log10(breaks = c(0.1, 0.5, 1, 2, 3, 6, 9, 12), minor_breaks = NULL, limits = c(0.1,6)) +
+  #xlim(c(0.1, 6))+
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = c(0.7, 0.01),
+    legend.justification = c(0, 0),
+    legend.background = element_rect(colour = "grey80"),
+    legend.title.align = .5
+  )  +
+  labs(title = "Parameters from each univariate logistic regression",
+       subtitle = "Models in the format dx_cancer ~ other_var",
+       caption = "The plot shows exponentiated parameter values. \n Intercepts are omitted for each univariate model.",
+       x = "OR (log10 scale)") +
+  theme(axis.text.y = element_text(color = rev(log_res_plot$sig)))
+
+```
+
+## Multivariate Regression Model 
+
+```{r multivariate_model, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+
+# Variable seleciton methods:
+## include all variables significantly associated with the outcome in the univariate model
+## Stepwise approach
+
+
+#NB: we need to remove variables that have only one level with values
+## stds_cervical_condylomatosis and stds_aids
+
+df_complete_cases <- df %>% 
+  dplyr::select(-stds_time_since_first_diagnosis, -stds_time_since_last_diagnosis) %>% # lot of missings in these variables, we might lose a lot of information
+  dplyr::select(- c(stds_cervical_condylomatosis, stds_aids, 27, 31:34)) %>% # variables with only 1 level and target variables other than the one we want
+  drop_na() # we can't have missing values for the stepAIC function
+
+#Mass package, as in class
+model.logit <- glm(dx ~ ., data = df_complete_cases, family = "binomial")
+model.step <- stepAIC(model.logit, direction = "backward", trace = FALSE)
+
+summary(model.step)
+
+## The model obtained from automatic variable selection with stepAIC seems to make little sense from a biological perspective.
+## Why include some stds and not others?
+## we are including 10 variables, and we have 18 positive cases. Maybe we are memorizing the data, instead of generalizing.
+
+
+## Based on this, we opted to select a model with all variables that were significant in the univariate analysis
+
+# Model including variables that were significant in the univariate analyses
+## NB: here we are using df instead of df_complete_cases
+
+
+#Multivariate logistic regression
+summary(glm(formula = dx ~ age + dx_hpv + iud + iud_years + smokes_packs_year, 
+            family = "binomial", data = df))
+
+#Same regression, with exponentiated parameters
+parsnip::fit(logistic_reg(), dx ~ age + dx_hpv + iud + iud_years + smokes_packs_year, data = df)
+
+
+```
+
+
+## Model Evaluation
+
+```{r model_evaluation, echo = TRUE, include = FALSE, message = FALSE, warning=FALSE}
+
+# #Set seed for reproducibility
+# set.seed(42)
+# 
+# #Prepare fataset for model evaluation
+# prep_dataset <- df %>% 
+#   dplyr::select(-c(dx_cin:biopsy)) %>% #drop unused target variables
+#   dplyr::select(-stds_time_since_first_diagnosis, -stds_time_since_last_diagnosis) %>%  # lot of missings in these variables
+#   drop_na()
+# 
+# 
+# # Holdout a validation set, by defining the indices of the training set
+# training.index <- createDataPartition(prep_dataset$dx_cancer, p=0.8, list=FALSE)
+# validation <- prep_dataset[-training.index,]
+# dataset <- prep_dataset[training.index,]
+# 
+# 
+# #Included validations:
+# # 20% hold-out validation
+# # Multiple 20% hold-out validation (25x)
+# # 2-fold cross validation
+# # 10-fold cross validation
+# # 25 times 10-fold cross validation
+# # Leave-one-out validation
+# # Bootstrap validation
+# 
+# # We use the ROC metric
+# 
+# # Tibble with all types of evaluation methods to explore
+# control_params <- tibble(method = c("LGOCV","LGOCV","cv","cv","repeatedcv","LOOCV","boot_all"),
+#                          p = c(0.8,0.8,NA,NA,NA,NA,NA),
+#                          number = c(1,25,2,10,10,NA,25),
+#                          repeats = c(NA,NA,NA,NA,25,NA,NA),
+#                          desc = c("20% hold-out validation", "Multiple 20% hold-out validation (25x)", "2-fold cross validation","10-fold cross validation", "25 times 10-fold cross validation","Leave-one-out validation","Bootstrap validation"))
+# 
+# # Iterate over control_params to create a trainControl function
+# 
+# train_controls <- control_params %>% 
+#   pmap(.f = ~ trainControl(method = ..1, p = ..2, number = ..3, repeats = ..4, summaryFunction=twoClassSummary, classProbs=T, savePredictions = T))
+#   
+# rpart <- train_controls %>% 
+#   map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "rpart", metric = "ROC", trControl = .x))
+# 
+# naive_bayes <- train_controls %>% 
+#   map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "naive_bayes", metric = "ROC", trControl = .x))
+# 
+# nnet <- train_controls %>% 
+#   map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "nnet", metric = "ROC", trControl = .x))
+# 
+# 
+# 
+# #TODO: ROC curves for these models
+# 
+
+```
+
+
+```{r model_evaluation_plots, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+# install.packages("plotROC")
+# library(plotROC)
+# 
+# ## TESTING
+# obj <- pROC::roc(nnet[[3]]$pred$obs, nnet[[3]]$pred$Yes)
+# 
+# ggroc(obj) +
+#   ggtitle(paste0('ROC Curve ', '(AUC = ', obj$auc, ')')) +
+#   geom_abline(intercept = 1, color="gray")
+# 
+# #sens, spec and threshold
+# blah <- tibble(sens = obj$sensitivities,
+#                spec = obj$specificities,
+#                tres = obj$thresholds)
+# 
+# #manually calculate AUC
+# AUC =sum(blah$spec [1:length(blah$tres)]*diff(c(0, 1 - blah$sens [1:length(blah$tres)])))
+# 
+# ggplot(blah, aes(y = sens, x = 1 - spec)) + 
+#   geom_line() +
+#   geom_abline(intercept = 0, color="gray") +
+#   geom_text(aes(x=0.5, y = 0.33), label=paste0("AUC: ", scales::number(AUC, accuracy = 0.001)))
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# get_auc <- function(dataset, outcome_var, model) {
+#   dataset <- get(dataset)
+#   model <- get(model)
+#   roc(dataset[[outcome_var]], predict(model, validation, type="prob")$Yes)$auc %>% as.numeric
+# }
+# 
+# roc(nnet[[1]]$pred$obs, nnet[[1]]$pred$Yes)
+# 
+# 1:7 %>% 
+#   map(roc(nnet[[.x]]$pred$obs, nnet[[.x]]$pred$Yes))
+# 
+# lapply(1:7, function(x){roc(naive_bayes[[x]]$pred$obs, naive_bayes[[x]]$pred$Yes)$auc}) 
+
+```
+
+
+## Info
+
+```{r final_notes, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+si <- sessionInfo()
+si$loadedOnly <- NULL
+si
+
+#TODO: do not forget to include a seed at each necessary step!!!
+#TODO: e.     Comentário sobre como sua abordagem e solução final precisariam de ser diferentes se aplicadas ao conjunto de dados drasticamente maior, discutindo sobre as implicações de ter conjuntos de dados “muito grandes”.
+
+```
+
+
+
+:::

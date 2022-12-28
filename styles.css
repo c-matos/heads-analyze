@@ -1,0 +1,17 @@
+
+body {background-color: white;}
+
+.main_header h1 {
+  text-align: center;
+}
+
+img[alt$=">1"] {
+  float: right;
+  width: 200px;
+}
+
+img[alt$=">2"] {
+  float: right;
+    width: 100px;
+
+}
