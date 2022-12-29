@@ -141,9 +141,9 @@ logistic_results2 <- logistic_results %>%
 
 ## Some CIs are absurdly large, so in this step we process that data to hide those variables
 log_res_plot <- logistic_results2 %>% 
-  mutate(conf.high = ifelse(conf.high > 6 | is.na(conf.high), 6, conf.high)) %>% # processing to show large CIs as -20 to 20, just for the plot
-  mutate(conf.low = ifelse(conf.low < 0 | is.na(conf.low), 0.1, conf.low)) %>% 
-  filter(conf.high <= 6 & conf.low >= 0.1) %>% 
+  #mutate(conf.high = ifelse(conf.high > 6 | is.na(conf.high), 6, conf.high)) %>% # processing to show large CIs as -20 to 20, just for the plot
+  # mutate(conf.low = ifelse(conf.low < 0 | is.na(conf.low), 0.1, conf.low)) %>% 
+  # filter(conf.high <= 6 & conf.low >= 0.1) %>% 
   mutate(sig = ifelse(sig == "sig", "red","black"))
 
 #Plot to show the OR and CI (dot and whisker plot), for each variable as a predictor of dx_cancer
@@ -153,7 +153,7 @@ log_res_plot %>% # excluding extremely large CIs
          vline = geom_vline(xintercept = 1, colour = "grey50", linetype = 2)) +
   scale_color_manual(paste0(as.character("\u03B1")," = 0.05"), breaks = c("red", "black"), values = c("red","black"),
                        labels = c("Significant", "Not significant")) +
-  scale_x_log10(breaks = c(0.1, 0.5, 1, 2, 3, 6, 9, 12), minor_breaks = NULL, limits = c(0.1,6)) +
+  scale_x_log10(breaks = c(0.1, 0.5, 1, 2, 6, 9, 12), minor_breaks = NULL, limits = c(0.1,12)) +
   #xlim(c(0.1, 6))+
   theme(
     plot.title = element_text(face = "bold"),
@@ -164,9 +164,18 @@ log_res_plot %>% # excluding extremely large CIs
   )  +
   labs(title = "Parameters from each univariate logistic regression",
        subtitle = "Models in the format dx_cancer ~ other_var",
-       caption = "The plot shows exponentiated parameter values. \n Intercepts are omitted for each univariate model.",
+       caption = "The plot shows exponentiated parameter values. \n Intercepts are omitted for each univariate model. \n Values lower than 0.1 and higher than 12 are omitted from the plot.",
        x = "OR (log10 scale)") +
   theme(axis.text.y = element_text(color = rev(log_res_plot$sig)))
+
+# Print a table with summary measures from univariate models
+# For very high upper CI values, replace by Inf to improve table readability
+logistic_results2 %>% 
+  dplyr::select(-c(outcome_var, other_var)) %>%
+  dplyr::mutate(conf.high = ifelse(conf.high>100000, Inf, conf.high)) %>% 
+  mutate(across(where(is.numeric), ~scales::number(., accuracy = 0.001))) %>% 
+  kbl() %>% 
+  kable_classic() 
 
 ```
 
@@ -205,11 +214,17 @@ summary(model.step)
 
 
 #Multivariate logistic regression
-summary(glm(formula = dx ~ age + dx_hpv + iud + iud_years + smokes_packs_year, 
-            family = "binomial", data = df))
+multivariate_model <- glm(formula = dx ~ age + dx_hpv + iud + iud_years + smokes_packs_year, 
+            family = "binomial", data = df)
 
-#Same regression, with exponentiated parameters
-parsnip::fit(logistic_reg(), dx ~ age + dx_hpv + iud + iud_years + smokes_packs_year, data = df)
+summary(multivariate_model)
+
+#Exponentiated parameters and confidence intervals
+broom::tidy(multivariate_model, exponentiate = T, conf.int = T) %>% 
+  mutate(across(where(is.numeric), ~scales::number(., accuracy = NULL))) %>% 
+  kbl() %>% 
+  kable_classic() 
+
 
 
 ```
@@ -219,105 +234,144 @@ parsnip::fit(logistic_reg(), dx ~ age + dx_hpv + iud + iud_years + smokes_packs_
 
 ```{r model_evaluation, echo = TRUE, include = FALSE, message = FALSE, warning=FALSE}
 
-# #Set seed for reproducibility
-# set.seed(42)
-# 
-# #Prepare fataset for model evaluation
-# prep_dataset <- df %>% 
-#   dplyr::select(-c(dx_cin:biopsy)) %>% #drop unused target variables
-#   dplyr::select(-stds_time_since_first_diagnosis, -stds_time_since_last_diagnosis) %>%  # lot of missings in these variables
-#   drop_na()
-# 
-# 
-# # Holdout a validation set, by defining the indices of the training set
-# training.index <- createDataPartition(prep_dataset$dx_cancer, p=0.8, list=FALSE)
-# validation <- prep_dataset[-training.index,]
-# dataset <- prep_dataset[training.index,]
-# 
-# 
-# #Included validations:
-# # 20% hold-out validation
-# # Multiple 20% hold-out validation (25x)
-# # 2-fold cross validation
-# # 10-fold cross validation
-# # 25 times 10-fold cross validation
-# # Leave-one-out validation
-# # Bootstrap validation
-# 
-# # We use the ROC metric
-# 
-# # Tibble with all types of evaluation methods to explore
-# control_params <- tibble(method = c("LGOCV","LGOCV","cv","cv","repeatedcv","LOOCV","boot_all"),
-#                          p = c(0.8,0.8,NA,NA,NA,NA,NA),
-#                          number = c(1,25,2,10,10,NA,25),
-#                          repeats = c(NA,NA,NA,NA,25,NA,NA),
-#                          desc = c("20% hold-out validation", "Multiple 20% hold-out validation (25x)", "2-fold cross validation","10-fold cross validation", "25 times 10-fold cross validation","Leave-one-out validation","Bootstrap validation"))
-# 
-# # Iterate over control_params to create a trainControl function
-# 
-# train_controls <- control_params %>% 
-#   pmap(.f = ~ trainControl(method = ..1, p = ..2, number = ..3, repeats = ..4, summaryFunction=twoClassSummary, classProbs=T, savePredictions = T))
-#   
-# rpart <- train_controls %>% 
-#   map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "rpart", metric = "ROC", trControl = .x))
-# 
-# naive_bayes <- train_controls %>% 
-#   map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "naive_bayes", metric = "ROC", trControl = .x))
-# 
-# nnet <- train_controls %>% 
-#   map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "nnet", metric = "ROC", trControl = .x))
-# 
-# 
-# 
-# #TODO: ROC curves for these models
-# 
+#Set seed for reproducibility
+set.seed(42)
+
+#Prepare fataset for model evaluation
+prep_dataset <- df %>%
+  dplyr::select(-c(dx:biopsy)) %>% #drop unused target variables
+  dplyr::select(-stds_time_since_first_diagnosis, -stds_time_since_last_diagnosis) %>%  # lot of missings in these variables
+  drop_na()
+
+
+# Holdout a validation set, by defining the indices of the training set
+training.index <- createDataPartition(prep_dataset$dx_cancer, p=0.8, list=FALSE)
+validation <- prep_dataset[-training.index,]
+dataset <- prep_dataset[training.index,]
+
+
+#Included validations:
+# 20% hold-out validation
+# Multiple 20% hold-out validation (25x)
+# 2-fold cross validation
+# 10-fold cross validation
+# 25 times 10-fold cross validation
+# Leave-one-out validation
+# Bootstrap validation
+
+# We use the ROC metric
+
+# Tibble with all types of evaluation methods to explore
+control_params <- tibble(method = c("LGOCV","LGOCV","cv","cv","repeatedcv","LOOCV","boot_all"),
+                         p = c(0.8,0.8,NA,NA,NA,NA,NA),
+                         number = c(1,25,2,10,10,NA,25),
+                         repeats = c(NA,NA,NA,NA,25,NA,NA),
+                         desc = c("20% hold-out validation", "Multiple 20% hold-out validation (25x)", "2-fold cross validation","10-fold cross validation", "25 times 10-fold cross validation","Leave-one-out validation","Bootstrap validation"))
+
+# Iterate over control_params to create a trainControl function
+
+train_controls <- control_params %>%
+  pmap(.f = ~ trainControl(method = ..1, p = ..2, number = ..3, repeats = ..4, summaryFunction=twoClassSummary, classProbs=T, savePredictions = T))
+
+rpart <- train_controls %>%
+  map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "rpart", metric = "ROC", trControl = .x))
+
+naive_bayes <- train_controls %>%
+  map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "naive_bayes", metric = "ROC", trControl = .x))
+
+nnet <- train_controls %>%
+  map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "nnet", metric = "ROC", trControl = .x))
+
+names(rpart) <- names(naive_bayes) <- names(nnet) <- control_params$desc
+
+#TODO: ROC curves for these models
+
 
 ```
 
 
 ```{r model_evaluation_plots, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
-# install.packages("plotROC")
-# library(plotROC)
+
+# Custom function to plot ROC curves for the 3 selected methods (Decision tree, naive bayes and neural network) in the same plot, for a given validation method
+custom_roc_plot <- function(validation_type) {
+  
+  #get roc data
+  nnet_roc <- pROC::roc(nnet[[validation_type]]$pred$obs, nnet[[validation_type]]$pred$Yes)
+  naive_bayes_roc <- pROC::roc(naive_bayes[[validation_type]]$pred$obs, naive_bayes[[validation_type]]$pred$Yes)
+  rpart_roc <- pROC::roc(rpart[[validation_type]]$pred$obs, rpart[[validation_type]]$pred$Yes)
+  
+  
+  #sensitivities and specificities
+  nnet_data <- tibble(Sensitivity = nnet_roc$sensitivities,
+                 Specificity = nnet_roc$specificities,
+                 Method="nnet")
+  naive_bayes_data <- tibble(Sensitivity = naive_bayes_roc$sensitivities,
+                 Specificity = naive_bayes_roc$specificities,
+                 Method="nb")
+  rpart_data <- tibble(Sensitivity = rpart_roc$sensitivities,
+                 Specificity = rpart_roc$specificities,
+                 Method="rpart")
+  
+  all_data <- bind_rows(nnet_data, naive_bayes_data, rpart_data)
+  
+  # nnet_auc <- c("nnet" = nnet_roc$auc)
+  # naive_bayes_auc <- c("nb" = naive_bayes_roc$auc)
+  # rpart_auc <- c("rpart" = rpart_roc$auc)
+  
+  #all_auc <- c("nnet" = nnet_roc$auc, "nb" = naive_bayes_roc$auc, "rpart" = rpart_roc$auc)
+  all_auc <- tibble(names = c("nnet","nb","rpart"),
+                    values = c(nnet_roc$auc,naive_bayes_roc$auc, rpart_roc$auc))
+  
+  #Return the plot
+  return(
+    ggplot() +
+      geom_line(data = all_data, aes(y = Sensitivity, x = 1 - Specificity, group=Method, color=Method)) +
+      geom_abline(intercept = 0, color="gray") +
+      geom_text(aes(x=0.9, y = 0.65, label ="AUC:")) +
+      geom_text(data = all_auc, aes(x=rep(0.9,3), y = c(0.45, 0.55, 0.35), color = names, label=scales::number(values))) +
+      labs(title = validation_type)
+  )
+}
+
+#We now explore all the selected validation methods
+control_params$desc %>% 
+  map(custom_roc_plot)
+
 # 
-# ## TESTING
-# obj <- pROC::roc(nnet[[3]]$pred$obs, nnet[[3]]$pred$Yes)
+# #get roc data
+# nnet_roc <- pROC::roc(nnet[[3]]$pred$obs, nnet[[3]]$pred$Yes)
+# naive_bayes_roc <- pROC::roc(naive_bayes[[3]]$pred$obs, naive_bayes[[3]]$pred$Yes)
+# rpart_roc <- pROC::roc(rpart[[3]]$pred$obs, rpart[[3]]$pred$Yes)
 # 
-# ggroc(obj) +
-#   ggtitle(paste0('ROC Curve ', '(AUC = ', obj$auc, ')')) +
-#   geom_abline(intercept = 1, color="gray")
 # 
-# #sens, spec and threshold
-# blah <- tibble(sens = obj$sensitivities,
-#                spec = obj$specificities,
-#                tres = obj$thresholds)
+# #sensitivities and specificities
+# nnet_data <- tibble(Sensitivity = nnet_roc$sensitivities,
+#                Specificity = nnet_roc$specificities,
+#                Method="nnet")
+# naive_bayes_data <- tibble(Sensitivity = naive_bayes_roc$sensitivities,
+#                Specificity = naive_bayes_roc$specificities,
+#                Method="nb")
+# rpart_data <- tibble(Sensitivity = rpart_roc$sensitivities,
+#                Specificity = rpart_roc$specificities,
+#                Method="rpart")
 # 
-# #manually calculate AUC
-# AUC =sum(blah$spec [1:length(blah$tres)]*diff(c(0, 1 - blah$sens [1:length(blah$tres)])))
+# all_data <- bind_rows(nnet_data, naive_bayes_data, rpart_data)
 # 
-# ggplot(blah, aes(y = sens, x = 1 - spec)) + 
-#   geom_line() +
+# # nnet_auc <- c("nnet" = nnet_roc$auc)
+# # naive_bayes_auc <- c("nb" = naive_bayes_roc$auc)
+# # rpart_auc <- c("rpart" = rpart_roc$auc)
+# 
+# all_auc <- c("nnet" = nnet_roc$auc, "nb" = naive_bayes_roc$auc, "rpart" = rpart_roc$auc)
+# all_auc <- tibble(names = c("nnet","nb","rpart"),
+#                   values = c(nnet_roc$auc,naive_bayes_roc$auc, rpart_roc$auc))
+# 
+# ggplot() +
+#   geom_line(data = all_data, aes(y = Sensitivity, x = 1 - Specificity, group=Method, color=Method)) +
 #   geom_abline(intercept = 0, color="gray") +
-#   geom_text(aes(x=0.5, y = 0.33), label=paste0("AUC: ", scales::number(AUC, accuracy = 0.001)))
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# get_auc <- function(dataset, outcome_var, model) {
-#   dataset <- get(dataset)
-#   model <- get(model)
-#   roc(dataset[[outcome_var]], predict(model, validation, type="prob")$Yes)$auc %>% as.numeric
-# }
-# 
-# roc(nnet[[1]]$pred$obs, nnet[[1]]$pred$Yes)
-# 
-# 1:7 %>% 
-#   map(roc(nnet[[.x]]$pred$obs, nnet[[.x]]$pred$Yes))
-# 
-# lapply(1:7, function(x){roc(naive_bayes[[x]]$pred$obs, naive_bayes[[x]]$pred$Yes)$auc}) 
+#   geom_text(aes(x=0.9, y = 0.65, label ="AUC:")) +
+#   geom_text(data = all_auc, aes(x=rep(0.9,3), y = c(0.45, 0.55, 0.35), color = names, label=scales::number(values))) +
+#   labs(title = control_params$desc[1])
+
 
 ```
 
