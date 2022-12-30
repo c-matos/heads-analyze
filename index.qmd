@@ -23,7 +23,14 @@ css: styles.css
 # Risk factors for cervical cancer: a case study
 
 ::: panel-tabset
-## Package imports
+## Data Import
+
+```{r setup_chunk}
+
+knitr::opts_chunk$set(fig.width = 12, fig.height = 8)
+
+```
+
 ```{r packages, echo = TRUE, include = TRUE, message = FALSE}
 
 # Importing the necessary packages
@@ -42,29 +49,20 @@ library(pROC)         # To create ROC curves
 
 ```
 
-
-```{r setup_chunk}
-
-knitr::opts_chunk$set(fig.width = 12, fig.height = 8)
-
-```
-
-## Data Import
-
 ```{r data_import, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
-#Immport the dataset directly from the website
+# Immport the dataset directly from the website
 df <- rio::import(file = "https://archive.ics.uci.edu/ml/machine-learning-databases/00383/risk_factors_cervical_cancer.csv",
                   setclass = "tibble") %>%
   janitor::clean_names() 
 
-#Pre-process the dataset
+# Pre-process the dataset
 df <- df %>%
   mutate(across(everything(), as.numeric)) %>% #forces "?" to NA
   mutate(across(c(10, 12, 14:25, 29:36), ~ factor(., levels = c(0,1), labels = c("No","Yes")))) %>% #Convert the appropriate columns to factor
-  #mutate(across(c(6, 7, 9, 11), as.numeric)) %>% #Convert the appropriate columns to numeric
   mutate(across(c(1:5, 8, 13, 26:28), as.integer)) %>% #Convert the appropriate columns to integer
   rename_all(.funs = ~ str_replace_all(names(df),"st_ds","stds")) 
 
+# Display the structure
 str(df)
 ```
 
@@ -75,9 +73,7 @@ str(df)
 summarytools::dfSummary(df) %>% 
   print(method = "render")
 
-#TODO: some text interpreting descriptive analytics
-## dx_cancer will be our target variable. Other target variables will be discarded.
-## stds_cervical_condylomatosis and stds_aids only have one level (no positive cases)
+#TODO: INTERPRETATION
 
 ```
 
@@ -103,6 +99,7 @@ fit_logistic_model <- function(dataset, outcome_var, other_var, exponentiate = T
     {
       #get dataset name passed as string
       dataset <- get(dataset)
+      
       #fit the model
       parsnip::fit(logistic_reg(), as.formula(paste(outcome_var, " ~ ", other_var)), data = dataset) %>% 
         broom::tidy(exponentiate = exponentiate, conf.int = T) %>% 
@@ -137,24 +134,28 @@ logistic_results2 <- logistic_results %>%
 ## Older age, having HPV, having IUD, using IUD for longer and higher intensity of smoking are associated with higher odds of having a cancer diagnosis.
 
 
+# Print a table with summary measures from univariate models
+# For very high upper CI values, replace by Inf to improve table readability
+logistic_results2 %>% 
+  dplyr::select(-c(outcome_var, other_var)) %>%
+  dplyr::mutate(conf.high = ifelse(conf.high>100000, Inf, conf.high)) %>% 
+  mutate(across(where(is.numeric), ~scales::number(., accuracy = 0.001))) %>% 
+  kbl() %>% 
+  kable_classic() 
+
 # Dot and whisker plot of all univariate models, condensed in a single plot
 
-## Some CIs are absurdly large, so in this step we process that data to hide those variables
+#Plot to show the OR and CI (dot and whisker plot), for each variable as a predictor of dx_cancer
 log_res_plot <- logistic_results2 %>% 
-  #mutate(conf.high = ifelse(conf.high > 6 | is.na(conf.high), 6, conf.high)) %>% # processing to show large CIs as -20 to 20, just for the plot
-  # mutate(conf.low = ifelse(conf.low < 0 | is.na(conf.low), 0.1, conf.low)) %>% 
-  # filter(conf.high <= 6 & conf.low >= 0.1) %>% 
   mutate(sig = ifelse(sig == "sig", "red","black"))
 
-#Plot to show the OR and CI (dot and whisker plot), for each variable as a predictor of dx_cancer
-log_res_plot %>% # excluding extremely large CIs
+log_res_plot %>%
   dwplot(dot_args = list(size = 2, aes(color = log_res_plot$sig)),
          whisker_args = list(aes(color = log_res_plot$sig)),
          vline = geom_vline(xintercept = 1, colour = "grey50", linetype = 2)) +
   scale_color_manual(paste0(as.character("\u03B1")," = 0.05"), breaks = c("red", "black"), values = c("red","black"),
                        labels = c("Significant", "Not significant")) +
   scale_x_log10(breaks = c(0.1, 0.5, 1, 2, 6, 9, 12), minor_breaks = NULL, limits = c(0.1,12)) +
-  #xlim(c(0.1, 6))+
   theme(
     plot.title = element_text(face = "bold"),
     legend.position = c(0.7, 0.01),
@@ -164,18 +165,13 @@ log_res_plot %>% # excluding extremely large CIs
   )  +
   labs(title = "Parameters from each univariate logistic regression",
        subtitle = "Models in the format dx_cancer ~ other_var",
-       caption = "The plot shows exponentiated parameter values. \n Intercepts are omitted for each univariate model. \n Values lower than 0.1 and higher than 12 are omitted from the plot.",
+       caption = "The plot shows exponentiated parameter values. \n 
+                  Intercepts are omitted for each univariate model. \n 
+                  Values lower than 0.1 and higher than 12 are omitted from the plot.",
        x = "OR (log10 scale)") +
   theme(axis.text.y = element_text(color = rev(log_res_plot$sig)))
 
-# Print a table with summary measures from univariate models
-# For very high upper CI values, replace by Inf to improve table readability
-logistic_results2 %>% 
-  dplyr::select(-c(outcome_var, other_var)) %>%
-  dplyr::mutate(conf.high = ifelse(conf.high>100000, Inf, conf.high)) %>% 
-  mutate(across(where(is.numeric), ~scales::number(., accuracy = 0.001))) %>% 
-  kbl() %>% 
-  kable_classic() 
+
 
 ```
 
@@ -314,18 +310,14 @@ custom_roc_plot <- function(validation_type) {
   
   all_data <- bind_rows(nnet_data, naive_bayes_data, rpart_data)
   
-  # nnet_auc <- c("nnet" = nnet_roc$auc)
-  # naive_bayes_auc <- c("nb" = naive_bayes_roc$auc)
-  # rpart_auc <- c("rpart" = rpart_roc$auc)
-  
-  #all_auc <- c("nnet" = nnet_roc$auc, "nb" = naive_bayes_roc$auc, "rpart" = rpart_roc$auc)
+  #AUC
   all_auc <- tibble(names = c("nnet","nb","rpart"),
                     values = c(nnet_roc$auc,naive_bayes_roc$auc, rpart_roc$auc))
   
   #Return the plot
   return(
     ggplot() +
-      geom_line(data = all_data, aes(y = Sensitivity, x = 1 - Specificity, group=Method, color=Method)) +
+      geom_path(data = all_data, aes(y = Sensitivity, x = 1 - Specificity, group=Method, color=Method)) +
       geom_abline(intercept = 0, color="gray") +
       geom_text(aes(x=0.9, y = 0.65, label ="AUC:")) +
       geom_text(data = all_auc, aes(x=rep(0.9,3), y = c(0.45, 0.55, 0.35), color = names, label=scales::number(values))) +
@@ -337,41 +329,7 @@ custom_roc_plot <- function(validation_type) {
 control_params$desc %>% 
   map(custom_roc_plot)
 
-# 
-# #get roc data
-# nnet_roc <- pROC::roc(nnet[[3]]$pred$obs, nnet[[3]]$pred$Yes)
-# naive_bayes_roc <- pROC::roc(naive_bayes[[3]]$pred$obs, naive_bayes[[3]]$pred$Yes)
-# rpart_roc <- pROC::roc(rpart[[3]]$pred$obs, rpart[[3]]$pred$Yes)
-# 
-# 
-# #sensitivities and specificities
-# nnet_data <- tibble(Sensitivity = nnet_roc$sensitivities,
-#                Specificity = nnet_roc$specificities,
-#                Method="nnet")
-# naive_bayes_data <- tibble(Sensitivity = naive_bayes_roc$sensitivities,
-#                Specificity = naive_bayes_roc$specificities,
-#                Method="nb")
-# rpart_data <- tibble(Sensitivity = rpart_roc$sensitivities,
-#                Specificity = rpart_roc$specificities,
-#                Method="rpart")
-# 
-# all_data <- bind_rows(nnet_data, naive_bayes_data, rpart_data)
-# 
-# # nnet_auc <- c("nnet" = nnet_roc$auc)
-# # naive_bayes_auc <- c("nb" = naive_bayes_roc$auc)
-# # rpart_auc <- c("rpart" = rpart_roc$auc)
-# 
-# all_auc <- c("nnet" = nnet_roc$auc, "nb" = naive_bayes_roc$auc, "rpart" = rpart_roc$auc)
-# all_auc <- tibble(names = c("nnet","nb","rpart"),
-#                   values = c(nnet_roc$auc,naive_bayes_roc$auc, rpart_roc$auc))
-# 
-# ggplot() +
-#   geom_line(data = all_data, aes(y = Sensitivity, x = 1 - Specificity, group=Method, color=Method)) +
-#   geom_abline(intercept = 0, color="gray") +
-#   geom_text(aes(x=0.9, y = 0.65, label ="AUC:")) +
-#   geom_text(data = all_auc, aes(x=rep(0.9,3), y = c(0.45, 0.55, 0.35), color = names, label=scales::number(values))) +
-#   labs(title = control_params$desc[1])
-
+#TODO: e.     Comentário sobre como sua abordagem e solução final precisariam de ser diferentes se aplicadas ao conjunto de dados drasticamente maior, discutindo sobre as implicações de ter conjuntos de dados “muito grandes”.
 
 ```
 
@@ -383,11 +341,6 @@ si <- sessionInfo()
 si$loadedOnly <- NULL
 si
 
-#TODO: do not forget to include a seed at each necessary step!!!
-#TODO: e.     Comentário sobre como sua abordagem e solução final precisariam de ser diferentes se aplicadas ao conjunto de dados drasticamente maior, discutindo sobre as implicações de ter conjuntos de dados “muito grandes”.
-
 ```
-
-
 
 :::
