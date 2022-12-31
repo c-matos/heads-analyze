@@ -1,0 +1,399 @@
+---
+title: |
+   HEADS 22-26
+      [![image alt >2](./images/fmup.png)](https://sigarra.up.pt/fmup/en/web_page.inicial)
+      [![image alt >1](./images/heads.png)](https://heads.med.up.pt/en/)
+   
+subtitle: "ANALYZE - Final Assignment"
+date: "2022/12/31"
+author:
+  - Carlos Matos
+  - Vera Pinheiro
+execute:
+  eval: true #runs the code in the chunk
+  echo: false #does not show the code in the final output
+  include: false #still evals, but prevents code and results from appearing in the final output
+format: 
+  html:
+    page-layout: full
+css: styles.css
+---
+
+
+# Risk factors for cervical cancer: a case study {.main_header}
+
+::: panel-tabset
+## Data Import
+
+
+This assignment was to analyse the risk_factors_cervical_cancer.csv dataset, which was built in order to predict risk factors for cervical cancer. This dataset was collected at "Hospital Universitario de Caracas" in Caracas, Venezuela, and comprises demographic information, habits, and historic medical records of 858 patients. Several patients decided not to answer some of the questions because of privacy concerns (missing values). The link to the dataset is included in the code below, and the variable list can be found here: [https://archive.ics.uci.edu/ml/datasets/Cervical+cancer+%28Risk+Factors%29#](https://archive.ics.uci.edu/ml/datasets/Cervical+cancer+%28Risk+Factors%29#)
+
+According to the American Cancer Society (1), a risk factor is “anything that increases your chance of getting a disease such as cancer”. Different cancers have different risk factors (eg.: Frequent overexposure to sunlight is a risk factor for skin cancer, while heavy smoking is a risk factor for lung cancer and many others), and having multiple risk factors may increase exponentially the risk of a cancer diagnosis. People without any of these risk factors rarely develop cancer.
+
+We know from the literature that infection by the human papillomavirus (HPV) is the most important risk factor for cervical cancer. HPV is a group of more than 150 related viruses, and while certain types may cause warts on or around the female and male genital organs and in the anal area - low-risk types, seldom linked to cancer - other types are high-risk types, and are strongly linked to cancers such as cancer of the cervix, vulva, and vagina in women, penile cancer in men, and cancers of the anus, mouth, and throat in both men and women. Although there is currently no cure for HPV infection, there are vaccines and wart/dysplasic lesions treatments. HPV is so strongly associated with cervical cancer that in many countries, including in Portugal, screening tests for cervical cancer actually consist in HPV screening.
+
+Sexual history is also an important factor, and some types of sexual behaviours and risks have been linked to increased risk of cervical cancer (most likely affected by increasing the chances of exposure to HPV). Becoming sexually active at a young age, having many sexual partners or one partner who is considered high risk (someone with HPV infection or who has many sexual partners) are the most common ones, as is history of a diagnosis of a sexually transmitted disease (STD). Additionally, evidence suggests that taking oral contraceptives for a long time increases the risk of cancer of the cervix, as do multiple full-term pregnancies (3 or more) and young age (less than 20 years old) at the time of their first full-term pergnancy.
+
+Smoking and having a depressed immune system - which can happen in the context of infection with human immunodeficiency virus (HIV), are also well established risk factors for cervical cancer. Low socio-economic status and a family history of cervical cancer are also important risk factors according to the literature.
+
+Our aim was to study the associations between several recorded risk factors and the risk of developing cervical cancer, using the patient pool in this dataset. 
+
+To start our work, we imported the dataset directly from the website and performed some basic data cleaning. We then explored the structure of the dataset (which we will from now on call `df`).
+
+```{r setup_chunk}
+
+knitr::opts_chunk$set(fig.width = 12, fig.height = 8)
+
+```
+
+```{r packages, echo = TRUE, include = TRUE, message = FALSE}
+
+# Importing the necessary packages
+
+library(rio)          # Import function for multiple file formats
+library(tidyverse)    # Data wrangling and visualization
+library(janitor)      # Data examining and cleaning functions
+library(summarytools) # Descriptive statistics
+library(kableExtra)   # Display and format html tables
+library(broom)        # Functions to tidy outputs
+library(tidymodels)   # Modeling and statistical analysis that share the underlying philosophy of the tidyverse.
+library(dotwhisker)   # Dot-and-Whisker Plots of Regression Results
+library(MASS)         # Used for the stepAIC function for automatic variable selection
+library(caret)        # For Classification and Regression Training
+library(pROC)         # To create ROC curves
+
+```
+
+```{r data_import, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+# Immport the dataset directly from the website
+df <- rio::import(file = "https://archive.ics.uci.edu/ml/machine-learning-databases/00383/risk_factors_cervical_cancer.csv",
+                  setclass = "tibble") %>%
+  janitor::clean_names() 
+
+# Pre-process the dataset
+df <- df %>%
+  mutate(across(everything(), as.numeric)) %>% #forces "?" to NA
+  mutate(across(c(10, 12, 14:25, 29:36), ~ factor(., levels = c(0,1), labels = c("No","Yes")))) %>% #Convert the appropriate columns to factor
+  mutate(across(c(1:5, 8, 13, 26:28), as.integer)) %>% #Convert the appropriate columns to integer
+  rename_all(.funs = ~ str_replace_all(names(df),"st_ds","stds")) 
+
+# Display the structure
+str(df)
+```
+
+We can see above that this dataset is a dataframe with 86 variables (columns) and 858 observations (rows), with some variety of variable formats, including numerical (continuous and integer) and factors
+
+## Descriptive statistics
+
+We then performed a descriptive analysis of the `df` dataset, available in the summary table below.
+
+Globally, we can see that most variables had some missing values, with only 10 variables having no missing values. These missings ranged from 0.8% of observations (in first_sexual_intercourse) and 91.7% (in stds_time_since_first_diagnosis and stds_time_since_last_diagnosis) - which limits their use later on at the regression analysis stage.
+
+From the table below, we can see that patients in this dataset were young (mean age 26.8, sd 8.5) and non-smokers (85.4%). 
+
+Most of them did not have Intra-Uterine device (IUD) (88.8%) but did have a history of hormonal contraceptives (64.1%), on average for 2.3 years (mean 2.3, sd 3.8). 
+
+Regarding sexually transmitted diseases (STDs), the large majority did not a history of an STD diagnosis (89.5%) - and from those who did, condylomatosis was the most prevalent one (44 cases). 
+
+Considering sexual history, in this dataset, the first sexual intercourse took place on average at 17 years old (mean 17, sd 2.8), patients on average 2.5 sexual partners (mean 2.5, sd 1.7) and 2.3 pregnancies (mean 2.3, sd 1.4). 
+
+Finally, regarding diagnosis (and potential target variables), most patients did not have a cancer diagnosis (840), while 18 did - the exact same proportion with an HPV diagnosis. Cervical intra-epithelial neoplasia (CIN) is a term that describes abnormal changes of the cells that line the cervix, but is not cancer - only 1% of patients had this diagnosis. `dx_cancer` will be our target variable. 
+
+Other target variables will be discarded (variable 33 to 36).
+
+
+```{r descriptive_stats,echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+summarytools::dfSummary(df) %>% 
+  print(method = "render")
+
+```
+
+## Simple Logistic Regression
+
+In order to test individual associations between risk factors and the dichotomous outcome variable `dx_cancer`, we performed simple (univariate) logistic regression analyses, fitting a logistic regression model for each independent variable, which will produce a measure of association (in this case, OR), the standard error, confidence interval (CI) and null hypothesis test. The statistical significance level considered was alpha = 0.05.
+
+```{r univariate_analysis, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+
+
+# Analysis to study association between a cancer diagnosis and each other variable, one at a time
+# Model of the type dx_cancer ~ covariate
+
+#* We created a function that, given a dataset, an outcome variable and a covariate in the dataset, 
+#* returns the appropriate logistic regression. Accepts the optional boolean argument "exponentiate", 
+#* that allows the user to choose between exponentiated parameters or not.
+
+# Function output includes the terms of the regression, point estimate, std.error, test statistic, p.value, confidence interval and variables used in the model. If any error occurs, NA is returned.
+
+fit_logistic_model <- function(dataset, outcome_var, covariate, exponentiate = TRUE) {
+  out <- tryCatch(
+    {
+      #get dataset name passed as string
+      dataset <- get(dataset)
+      
+      #fit the model
+      parsnip::fit(logistic_reg(), as.formula(paste(outcome_var, " ~ ", covariate)), data = dataset) %>% 
+        broom::tidy(exponentiate = exponentiate, conf.int = T) %>% 
+        mutate(outcome_var = outcome_var,
+               covariate = covariate)
+    },
+    error = function(cond) {
+      return(tibble('term'=NA, 'estimate'=NA, 'std.error'=NA, 'statistic'=NA, 'p.value'=NA, 'conf.low'=NA, 'conf.high'=NA, 
+                    'outcome_var' = outcome_var, 'covariate' = covariate))
+    })
+  return(out)
+}
+
+# Apply the created function to a list that contains all the variables in the dataset
+logistic_results <- pmap_dfr(.l = as.list(crossing("df",
+                                                   "dx_cancer",
+                                                   names(df[c(1:28,30:31)]))),
+                             .f = ~ fit_logistic_model(dataset = ..1,
+                                                       outcome_var = ..2,
+                                                       covariate = ..3,
+                                                       exponentiate = T))
+
+# Add a variable with values "sig" or "not sig", for convenience
+logistic_results2 <- logistic_results %>% 
+  mutate(sig = ifelse(p.value < 0.05, "sig","not sig")) %>% 
+  filter(term != "(Intercept)") 
+
+
+# Print a table with summary measures from simple logistic regression models
+# For very high upper CI values, replace by Inf to improve table readability
+logistic_results2 %>% 
+  dplyr::select(-c(outcome_var, covariate)) %>%
+  dplyr::mutate(conf.high = ifelse(conf.high>100000, Inf, conf.high)) %>% 
+  mutate(across(where(is.numeric), ~scales::number(., accuracy = 0.001))) %>% 
+  kbl() %>% 
+  kable_classic() 
+
+
+
+```
+
+We can see above the summary measures for the simple logistic regression models we built. Variables significantly associated with `dx_cancer` are: `age`, `dx_hpv`, `iud`, `iud_years`, `smokes_packs_year`. 
+We can see that `dx_hpv` has a very strong association with the outcome variable - From the 18 cases of cervical cancer included in this dataset, 16 had HPV, and only two patients with HPV did not have a cancer diagnosis, which means they are highly correlated and explains such a high coefficient and strong association.
+
+Thus, by descending order of the strength of the association, having HPV, having an IUD, having an IUD for longer, heavy smoking and older age are associated with higher odds of having a cervical cancer diagnosis - in line with the literature.
+
+For easier representation we built a dot and whisker plot. The coefficient for `dx_hpv` does not appear due to scale.
+
+
+```{r univariate_analysis_plot, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+
+# Dot and whisker plot of all simple logistic regression models, condensed in a single plot
+
+#Plot to show the OR and CI (dot and whisker plot), for each variable as a predictor of dx_cancer
+log_res_plot <- logistic_results2 %>% 
+  mutate(sig = ifelse(sig == "sig", "red","black"))
+
+log_res_plot %>%
+  dwplot(dot_args = list(size = 2, aes(color = log_res_plot$sig)),
+         whisker_args = list(aes(color = log_res_plot$sig)),
+         vline = geom_vline(xintercept = 1, colour = "grey50", linetype = 2)) +
+  scale_color_manual(paste0(as.character("\u03B1")," = 0.05"), breaks = c("red", "black"), values = c("red","black"),
+                       labels = c("Significant", "Not significant")) +
+  scale_x_log10(breaks = c(0.1, 0.5, 1, 2, 6, 9, 12), minor_breaks = NULL, limits = c(0.1,12)) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = c(0.7, 0.01),
+    legend.justification = c(0, 0),
+    legend.background = element_rect(colour = "grey80"),
+    legend.title.align = .5
+  )  +
+  labs(title = "Parameters from each univariate logistic regression",
+       subtitle = "Models in the format dx_cancer ~ covariate",
+       caption = "The plot shows exponentiated parameter values. \n 
+                  Intercepts are omitted for each univariate model. \n 
+                  Values lower than 0.1 and higher than 12 are omitted from the plot.",
+       x = "OR (log10 scale)") +
+  theme(axis.text.y = element_text(color = rev(log_res_plot$sig)))
+
+```
+
+
+
+## Multivariable Regression Model 
+
+Considering the fact that often times, risk factors coexist, and in order to study the association of each individual risk factor considering all other relevant risk factors, we built a multivariable regression model. In order to build a consistent model we excluded variables with a high proportion of missing values, as previously mentioned (`stds_time_since_first_diagnosis` and `stds_time_since_last_diagnosis`), and factor variables with only one level (`stds_cervical_condylomatosis` and `stds_aids`).
+
+Firstly, we explored a backward stepwise automatic approach for covariate selection. The model we obtained (summary below) from automatic variable selection with stepAIC seems to make little sense from a biological perspective: Considering that cancer is usually the result of cumulative exposures over time, we would expect variables that include duration of exposure to be included in the model, which was not the case. E.g. If having an IUD is a relevant covariate, we posit that the duration of IUD use would be relevant to include in the model. The same reasoning can be applied to smoking.
+
+Therefore, we then opted for a multivariable model including as covariates all the variables significantly associated with `dx_cancer` in the simple logistic regression models. We believe that age is a fundamental variable to include in the model, as it reflects all the cumulative exposures that a person had since birth (or even before), that can increase the risk of cancer. The model summary can be found below. 
+
+```{r multivariable_model, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+
+# Variable selection methods:
+
+
+# 1) Stepwise approach
+
+# df with only complete cases to use in the stepAIC function 
+df_complete_cases <- df %>% 
+  dplyr::select(-stds_time_since_first_diagnosis, -stds_time_since_last_diagnosis) %>% # lot of missings in these variables, we might lose a lot of information
+  dplyr::select(- c(stds_cervical_condylomatosis, stds_aids, 30:34)) %>% # variables with only 1 level and target variables other than the one we want
+  drop_na() # we can't have missing values for the stepAIC function
+
+model.logit <- glm(dx_cancer ~ ., data = df_complete_cases, family = "binomial")
+model.step <- MASS::stepAIC(model.logit, direction = "backward", trace = FALSE)
+
+#Show summary
+summary(model.step)
+
+
+# 2) Model including only variables that were significant in the simple regression models 
+
+## NB: here we are using df instead of df_complete_cases, because missing values are allowed and this way we are including more information
+
+#Multivariable logistic regression
+multivariable_model <- glm(formula = dx ~ age + dx_hpv + iud + iud_years + smokes_packs_year, 
+            family = "binomial", data = df)
+
+#Show summary
+summary(multivariable_model)
+
+#Exponentiated parameters and confidence intervals
+broom::tidy(multivariable_model, exponentiate = T, conf.int = T) %>% 
+  mutate(across(where(is.numeric), ~scales::number(., accuracy = NULL))) %>% 
+  kbl() %>% 
+  kable_classic() 
+
+
+
+```
+
+
+In the second model, we found a significant association between `dx_hpv` and `iud` with the outcome variable. Particularly relevant is the fact that a patient with HPV is 563 times more likely to have cervical cancer than a patient without HPV, and a patient using an IUD is 7 times more likely to have cervical cancer compared to a patient who doesn't use one.
+
+
+## Model Evaluation
+
+At this stage, we wanted to see if we could build a model that could actually predict a cervical cancer diagnosis on this dataset, based on the data we have. Therefore, we built several derivation models and performed model evaluation through various methods to reach our final model. We set a seed for reproducibility, to ensure the results are directly comparable between the various algorithms. We then partitioned the data to create a training set `dataset` (from where we will build our model, where we will train our model) and a validation set `validation` (new set of data, where we will run our model and assess its performance). Due to their statistical power, we chose to evaluate 3 algorithms:
+- Recursive Partitioning and Regression Trees (`rpart`)
+- Neural Networks (`nnet`)
+- Naive Bayesian Networks (`bayes`)
+
+For the evaluation of our models we wanted to see their performance in the classification of new (because we partitioned the data) cases, by analysing not only the proportion of correctly classified cases but also the distance between predicted and actual values, and therefore, the error. We used several sampling methods for estimating the generalized error:
+- 20% hold-out validation
+- Multiple 20% hold-out validation (25x)
+- 2-fold cross validation
+- 10-fold cross validation
+- 25x 10-fold cross validation
+- Leave-one-out validation
+- Bootstrap validation
+
+In order to evaluate the models we used the ROC metric. ROC stands for Receiver Operating Characteristics, and it is a graph of True Positive Rate (sensitivity) vs False Positive Rate (1-Specificity) of the model. It allows the analysis of the impact of these parameters on the error. AUC, which ranges between 0 and 1, is the proportion of the ROC plot that is underneath the curve, and is useful as a single number summary of classifier performance - Higher value = better classifier (2).
+
+
+```{r model_evaluation, echo = TRUE, include = FALSE, message = FALSE, warning=FALSE}
+
+#Set seed for reproducibility
+set.seed(42)
+
+#Prepare fataset for model evaluation
+prep_dataset <- df %>%
+  dplyr::select(-c(dx:biopsy)) %>% #drop unused target variables
+  dplyr::select(-stds_time_since_first_diagnosis, -stds_time_since_last_diagnosis) %>%  # lot of missings in these variables
+  drop_na()
+
+
+# Holdout a validation set, by defining the indices of the training set
+training.index <- createDataPartition(prep_dataset$dx_cancer, p=0.8, list=FALSE)
+validation <- prep_dataset[-training.index,]
+dataset <- prep_dataset[training.index,]
+
+
+
+
+# Tibble with all types of evaluation methods to explore
+control_params <- tibble(method = c("LGOCV","LGOCV","cv","cv","repeatedcv","LOOCV","boot_all"),
+                         p = c(0.8,0.8,NA,NA,NA,NA,NA),
+                         number = c(1,25,2,10,10,NA,25),
+                         repeats = c(NA,NA,NA,NA,25,NA,NA),
+                         desc = c("20% hold-out validation", "Multiple 20% hold-out validation (25x)", "2-fold cross validation","10-fold cross validation", "25 times 10-fold cross validation","Leave-one-out validation","Bootstrap validation"))
+
+# Iterate over control_params to create a trainControl function
+
+train_controls <- control_params %>%
+  pmap(.f = ~ trainControl(method = ..1, p = ..2, number = ..3, repeats = ..4, summaryFunction=twoClassSummary, classProbs=T, savePredictions = T))
+
+rpart <- train_controls %>%
+  map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "rpart", metric = "ROC", trControl = .x))
+
+naive_bayes <- train_controls %>%
+  map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "naive_bayes", metric = "ROC", trControl = .x))
+
+nnet <- train_controls %>%
+  map(.f = ~ train(dx_cancer ~ ., data=dataset, method = "nnet", metric = "ROC", trControl = .x))
+
+names(rpart) <- names(naive_bayes) <- names(nnet) <- control_params$desc
+
+
+```
+
+We can clearly see that, for all evaluation methods, Recursive Partitioning and Regression Trees (`rpart`) is the algorithm with the best predictive power, with the highest AUC - ranging from 0.738 in the 2-fold cross validation method to 0.944 in the 20% hold-out validation. In all evaluation methods, the `rpart` algorithm is the best one (highest AUC), followed by Neural Networks (`nnet`) and Naive Bayesian Networks (`bayes`), in this order.
+
+These results are in line with the ones from the multivariate regression, as they generally show a good predictive power for all classifier algorithms, which makes sense considering the identified risk factors (`dx_hpv` and `iud`) and the strength of their association with the outcome of diagnosis of cervical cancer. Again, as previously mentioned, having a HPV diagnosis is highly correlated with the outcome of cervical cancer, and we cannot exclude endogeneity, but it indeed explains much of the predictive power of the models in our dataset.
+
+However, it needs to be acknowledged that our approach is designed for this specific dataset. In a total of 858 patients, we have 18 cases of cervical cancer and 18 HPV diagnosis, so it is not surprising to find an association between these two in a multivariate regression and a strong predictive power in a classification algorithm. But when we are talking about a machine learning classification algorithm, the end goal is for it to make accurate predictions not only on the validation dataset, but for the entire population, which would require a much larger dataset. In this case, an algorithm which could predict cervical cancer of patients (ideally at the pre-malignant stage) at a large scale would be an incredibly useful prevention tool, but would require a much larger dataset, to capture the higher variability that exists in the population. The approach would have to be adapted to this new dataset, considering data quality issues such as completeness and, additionally, it would have to bear in mind that with large enough datasets, one could find possibly spurious associations between all variables, therefore effectively reducing predictive power. 
+On the other hand, larger datasets might capture the effect of rare exposures that could have a high correlation with the sutidied outcome, that were absent form this dataset.
+
+Therefore, the inclusion of variables in the multivariate regression and in the algorithms would have to be very sensible and one could not simply include all variables (from the clean dataset) - indeed, a sensible approach should be undertaken, considering not only biological reasoning, but also the balance and consistency of the dataset itself.
+
+
+```{r model_evaluation_plots, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+
+# Custom function to plot ROC curves for the 3 selected methods (Decision tree, naive bayes and neural network) in the same plot, for a given validation method
+custom_roc_plot <- function(validation_type) {
+  
+  #get roc data
+  nnet_roc <- pROC::roc(nnet[[validation_type]]$pred$obs, nnet[[validation_type]]$pred$Yes)
+  naive_bayes_roc <- pROC::roc(naive_bayes[[validation_type]]$pred$obs, naive_bayes[[validation_type]]$pred$Yes)
+  rpart_roc <- pROC::roc(rpart[[validation_type]]$pred$obs, rpart[[validation_type]]$pred$Yes)
+  
+  
+  #sensitivities and specificities
+  nnet_data <- tibble(Sensitivity = nnet_roc$sensitivities,
+                 Specificity = nnet_roc$specificities,
+                 Method="nnet")
+  naive_bayes_data <- tibble(Sensitivity = naive_bayes_roc$sensitivities,
+                 Specificity = naive_bayes_roc$specificities,
+                 Method="nb")
+  rpart_data <- tibble(Sensitivity = rpart_roc$sensitivities,
+                 Specificity = rpart_roc$specificities,
+                 Method="rpart")
+  
+  all_data <- bind_rows(nnet_data, naive_bayes_data, rpart_data)
+  
+  #AUC
+  all_auc <- tibble(names = c("nnet","nb","rpart"),
+                    values = c(nnet_roc$auc,naive_bayes_roc$auc, rpart_roc$auc))
+  
+  #Return the plot
+  return(
+    ggplot() +
+      geom_path(data = all_data, aes(y = Sensitivity, x = 1 - Specificity, group=Method, color=Method)) +
+      geom_abline(intercept = 0, color="gray") +
+      geom_text(aes(x=0.9, y = 0.65, label ="AUC:")) +
+      geom_text(data = all_auc, aes(x=rep(0.9,3), y = c(0.45, 0.55, 0.35), color = names, label=scales::number(values))) +
+      labs(title = validation_type)
+  )
+}
+
+#We now explore all the selected validation methods
+control_params$desc %>% 
+  map(custom_roc_plot)
+
+```
+
+
+## Info
+
+```{r final_notes, echo = TRUE, include = TRUE, message = FALSE, warning=FALSE}
+si <- sessionInfo()
+si$loadedOnly <- NULL
+si
+
+```
+
+:::
